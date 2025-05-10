@@ -2,13 +2,13 @@ import * as React from 'react';
 import { Component } from 'react';
 import { RouteComponentProps, Switch, Route, Redirect } from 'react-router';
 import { connect } from 'react-redux';
-import { Navbar } from 'app/components/Navbar';
+import { Navbar } from 'app/components/Navbar'; // Assuming this path is correct
 import AddEmployee from 'app/containers/Employee/components/AddEmployee';
 import EditEmployee from 'app/containers/Employee/components/EditEmployee';
 import Employees from 'app/containers/Employee/components/Employees';
 import 'react-toastify/dist/ReactToastify.css';
-import '../../style.local.css';
-import style from '../../style.local.css';
+import '../../style.local.css'; // This imports global styles
+import style from '../../style.local.css'; // This imports styles as a module
 import { ToastContainer } from 'react-toastify';
 import ViewEmployee from 'app/containers/Employee/components/ViewEmployee';
 
@@ -26,15 +26,20 @@ class App extends Component<App.Props> {
       ? parseInt(process.env.TOASTER_AUTO_CLOSE_TIME_IN_MILLISECONDS, 10)
       : 3000;
 
+    // --- MODIFIED CloseButton ---
     const CloseButton = ({ closeToast }: any) => (
-      <a href="javascript:void(0)" className={style['e-toaster-close']}>
+      <button
+        type="button"
+        className={style['e-toaster-close']} // Apply the class to the button
+        onClick={closeToast} // onClick handler on the button
+      >
         <i
           className={`${style.icon} ${style['i-cancel']} ${style['margin-left']}`}
           aria-hidden="true"
-          onClick={closeToast}
         />
-      </a>
+      </button>
     );
+    // --- END OF MODIFICATION ---
 
     return (
       <div>
@@ -47,7 +52,7 @@ class App extends Component<App.Props> {
           <Route render={() => <Redirect to="/error" />} />
         </Switch>
         <ToastContainer
-          closeButton={<CloseButton />}
+          closeButton={<CloseButton />} // This prop now receives the modified button
           autoClose={autoCloseTime}
           hideProgressBar={true}
         />
