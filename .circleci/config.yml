@@ -405,6 +405,8 @@ jobs:
             npm install
 
              
+       # Inside your .circleci/config.yml, within the 'jobs' -> <your-job-name> -> 'steps' section
+
       - run:
           name: Package Backend
           command: |
@@ -420,30 +422,32 @@ jobs:
             ls -la # See what's here initially (node_modules might exist from caching)
 
             echo "Ensuring node_modules are installed (running npm install)..."
-            npm install # Make sure dependencies are there for the build
+            npm install --production=false # Optional: ensures dev deps are installed for the build, production=false avoids reinstalling deps meant for the server
 
             echo "Running npm run build (which should execute tsc)..."
-            npm run build # This is where 'dist/' should be created
+            npm run build # This is where 'dist/' should be created. **MAKE SURE this script exists in backend/package.json!**
 
             echo "Build finished. Checking for dist/ directory..."
             if [ -d "dist" ]; then
               echo "SUCCESS: dist/ directory was created."
               echo "Contents of dist/ directory:"
-              ls -la dist # CRITICAL: See if main.js is here
+              ls -la dist # CRITICAL: See what files are inside 'dist/'
               
-              # Specific check for main.js (or your entry file)
-              if [ -f "dist/main.js" ]; then
-                echo "SUCCESS: dist/main.js exists!"
+              # **Potential Fix 1: Ensure this filename check matches the file specified in ecosystem.config.js**
+              # Your PM2 error looked for /home/ubuntu/backend-app/dist/server.js
+              # Change 'dist/main.js' to 'dist/server.js' if that's correct based on your ecosystem.config.js 'script' value.
+              if [ -f "dist/server.js" ]; then # <-- Assuming 'server.js' is correct, CHANGE 'main.js'
+                echo "SUCCESS: dist/server.js exists! This is your application entry point."
               else
-                echo "ERROR: dist/main.js DOES NOT EXIST. Check your tsc build and tsconfig.json outDir."
-                # Consider exiting with an error if main.js is crucial and missing
-                # exit 1 
+                echo "ERROR: dist/server.js DOES NOT EXIST inside the built 'dist' directory."
+                echo "Check your 'package.json' build script, 'tsconfig.json outDir', and backend entry file name."
+                exit 1 # Definitely exit if the expected main built file isn't created
               fi
             else
               echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-              echo "CRITICAL ERROR: dist/ directory was NOT created by npm run build!"
-              echo "This means 'tsc' (TypeScript compiler) did not produce output to a 'dist' folder."
-              echo "Check your 'package.json' build script and 'tsconfig.json' (especially 'outDir')."
+              echo "CRITICAL ERROR: 'dist/' directory was NOT created by 'npm run build'!"
+              echo "This means your backend compilation/build step failed or is misconfigured."
+              echo "Check your 'package.json' build script and 'tsconfig.json'."
               echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
               exit 1 # Definitely exit if dist isn't created
             fi
@@ -452,31 +456,40 @@ jobs:
             if [ -f "ecosystem.config.js" ]; then
               echo "ecosystem.config.js found in backend/ root."
               echo "Running tar command including ecosystem.config.js..."
-              tar -czf artifact.tar.gz dist/* package* ecosystem.config.js
+              # **Potential Fix 2: Include the 'dist/' DIRECTORY, not just its contents ('dist/*').**
+              # This ensures that when unarchived on the server, the structure 'backend-app/dist/server.js' is preserved,
+              # matching the path PM2 looks for (./dist/server.js relative to backend-app directory).
+              # Also, ensure 'package.json' and 'package-lock.json' (from package*) are included for server dependency install/verify.
+              tar -czf artifact.tar.gz dist/ package* ecosystem.config.js # <-- Added '/' to dist and ensured package* included
+
             else
-              echo "WARNING: ecosystem.config.js not found in backend/ root."
-              echo "Running tar command WITHOUT ecosystem.config.js (this might cause PM2 issues later)..."
-              tar -czf artifact.tar.gz dist/* package*
+              echo "WARNING: ecosystem.config.js not found in backend/ root. (This might cause issues later with PM2)."
+              echo "Running tar command WITHOUT ecosystem.config.js..."
+               # **Apply Fix 2 here as well:**
+              tar -czf artifact.tar.gz dist/ package* # <-- Added '/' to dist and ensured package* included
             fi
             
-            echo "Checking if artifact.tar.gz was created:"
-            ls -la artifact.tar.gz
+            echo "Checking if artifact.tar.gz was created in backend/:"
+            ls -la artifact.tar.gz || echo "Error: artifact.tar.gz was not created!" && exit 1 # Fail if tar failed
 
-            echo "Listing contents of artifact.tar.gz (to verify inclusion):"
-            tar -tzf artifact.tar.gz # List contents of the tarball
+            echo "Listing contents of artifact.tar.gz (to verify inclusion and structure):"
+            tar -tzf artifact.tar.gz # CRITICAL: See if 'dist/server.js' (or main.js) is listed starting with 'dist/'
 
             echo "Changing back to project root..."
             cd ..
             echo "Current directory is now: $(pwd)"
             
             echo "Creating Ansible target directory if it doesn't exist..."
-            mkdir -p .circleci/ansible/roles/deploy/files
-            
-            echo "Copying artifact..."
-            cp backend/artifact.tar.gz .circleci/ansible/roles/deploy/files
-            
+            # Assuming .circleci/ansible/roles/deploy/files exists or will be handled
+            # mkdir -p .circleci/ansible/roles/deploy/files # This line is likely fine but can uncomment if needed
+
+            # **Fix: Update the source path to copy artifact.tar.gz FROM the backend directory**
+            # It was created in ./backend/artifact.tar.gz
+            echo "Copying artifact from backend/ to Ansible files directory..."
+            cp backend/artifact.tar.gz .circleci/ansible/roles/deploy/files/ # <-- Source path was missing 'backend/'
+
             echo "Verifying artifact in target directory:"
-            ls -la .circleci/ansible/roles/deploy/files/artifact.tar.gz
+            ls -la .circleci/ansible/roles/deploy/files/artifact.tar.gz || echo "Error: Artifact copy failed!" && exit 1 # Fail if copy failed
             echo "--- Finished Package Backend Step ---"
 
       - run:
