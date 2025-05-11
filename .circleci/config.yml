@@ -427,22 +427,21 @@ jobs:
             echo "Running npm run build (which should execute tsc)..."
             npm run build # This is where 'dist/' should be created. **MAKE SURE this script exists in backend/package.json!**
 
-            echo "Build finished. Checking for dist/ directory..."
+             echo "Build finished. Checking for dist/ directory..."
             if [ -d "dist" ]; then
-              echo "SUCCESS: dist/ directory was created."
-              echo "Contents of dist/ directory:"
-              ls -la dist # CRITICAL: See what files are inside 'dist/'
-              
-              # **Potential Fix 1: Ensure this filename check matches the file specified in ecosystem.config.js**
-              # Your PM2 error looked for /home/ubuntu/backend-app/dist/server.js
-              # Change 'dist/main.js' to 'dist/server.js' if that's correct based on your ecosystem.config.js 'script' value.
-              if [ -f "dist/server.js" ]; then # <-- Assuming 'server.js' is correct, CHANGE 'main.js'
-                echo "SUCCESS: dist/server.js exists! This is your application entry point."
-              else
-                echo "ERROR: dist/server.js DOES NOT EXIST inside the built 'dist' directory."
-                echo "Check your 'package.json' build script, 'tsconfig.json outDir', and backend entry file name."
-                exit 1 # Definitely exit if the expected main built file isn't created
-              fi
+             echo "SUCCESS: dist/ directory was created."
+            echo "Contents of dist/ directory:"
+             ls -la dist # Shows main.js
+
+         
+             if [ -f "dist/main.js" ]; then  
+             echo "SUCCESS: dist/main.js exists! This is your application entry point."
+             else
+             echo "ERROR: dist/main.js DOES NOT EXIST inside the built 'dist' directory."
+             echo "Check your 'package.json' build script, 'tsconfig.json outDir', and backend entry file name."
+            exit 1 # Definitely exit if the expected main built file isn't created
+            fi
+     
             else
               echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
               echo "CRITICAL ERROR: 'dist/' directory was NOT created by 'npm run build'!"
@@ -473,7 +472,7 @@ jobs:
             ls -la artifact.tar.gz || echo "Error: artifact.tar.gz was not created!" && exit 1 # Fail if tar failed
 
             echo "Listing contents of artifact.tar.gz (to verify inclusion and structure):"
-            tar -tzf artifact.tar.gz # CRITICAL: See if 'dist/server.js' (or main.js) is listed starting with 'dist/'
+            tar -tzf artifact.tar.gz 
 
             echo "Changing back to project root..."
             cd ..
