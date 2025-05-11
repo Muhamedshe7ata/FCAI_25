@@ -384,30 +384,40 @@ jobs:
 
   
   deploy-backend:
-   
     docker:
-    - image: cimg/base:stable
+      - image: cimg/base:stable
     steps:
       - checkout
       - install_awscli
-      - install_ansible
       - install_nodejs
+      - install_ansible
       - add_ssh_keys:
           fingerprints: [" SHA256:FJogcncZoAfN0hgvqhqDgAiiOafEii9G+HsAStU+Ok4"]
       - attach_workspace:
-          at: .
-      - restore_cache:
-          keys: [backend-deps]
+          at: ~/
       - run:
           name: Install dependencies
           command: |
+            sudo apt -y install tar gzip curl
+      - run:
+          name: Deploy backend
+          command: |
             cd backend
             npm install
-
-             
-       # Inside your .circleci/config.yml, within the 'jobs' -> <your-job-name> -> 'steps' section
-
-      # Inside your .circleci/config.yml, within the 'jobs' -> <your-job-name> -> 'steps' section
+            npm run build
+            
+            cd ..
+            tar -C backend -czvf artifact.tar.gz .
+            cp artifact.tar.gz .circleci/ansible/roles/deploy/files
+            
+            export TYPEORM_MIGRATIONS_DIR=./migrations
+            export TYPEORM_ENTITIES=./modules/domain/**/*.entity{.ts,.js}
+            export TYPEORM_MIGRATIONS=./migrations/*.ts
+            
+            cd .circleci/ansible
+            echo "Contents  of the inventory.txt file is -------"
+            cat inventory.txt
+            ansible-playbook -i inventory.txt deploy-backend.yml
 
       - run:
             name: Package Backend
