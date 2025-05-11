@@ -311,7 +311,7 @@ jobs:
           name: Run migrations
           command: |
             cd backend
-            npm ci
+            npm install
             if [ -f .env ]; then
               export $(grep -v '^#' .env | xargs)
             fi
