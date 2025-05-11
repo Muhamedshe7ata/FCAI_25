@@ -567,68 +567,95 @@ jobs:
       # - destroy-environment
       # - revert-migrations
   smoke-test:
-    docker:
-      - image: cimg/base:stable
-    steps:
-      - checkout
-      - run:
-          name: Install dependencies
-          command: |
-            sudo apt update
-            sudo apt upgrade -y
-            sudo apt install -y curl
-            sudo apt install -y awscli
-            aws --version
-      - run:
-          name: Backend smoke test.
-          command: |       
-              #!/bin/bash -eo pipefail
-              STACK_SUFFIX=${CIRCLE_WORKFLOW_ID:0:7}
-              BACKEND_PUBLIC_IP=$(aws ec2 describe-instances \
-               --filters "Name=tag:aws:cloudformation:stack-name,Values=udapeople-backend-${STACK_SUFFIX}" "Name=instance-state-name,Values=running" \
-              --query 'Reservations[].Instances[].PublicIpAddress' \
-              --output text)
+        docker:
+          - image: cimg/base:stable
+        steps:
+          - run:
+              name: Install dependencies
+              command: |
+                sudo apt update
+                sudo apt upgrade -y
+                sudo apt install -y curl awscli
+                aws --version
+          - run:
+              name: Backend smoke test
+              command: |
+                STACK_SUFFIX=${CIRCLE_WORKFLOW_ID:0:7}
+                BACKEND_PUBLIC_IP=$(aws ec2 describe-instances --filters "Name=tag:aws:cloudformation:stack-name,Values=udapeople-backend-${STACK_SUFFIX}" "Name=instance-state-name,Values=running" --query 'Reservations[].Instances[].PublicIpAddress' --output text)
+                BACKEND_PUBLIC_IP=$(aws ec2 describe-instances --filters "Name=tag:aws:cloudformation:stack-name,Values=udapeople-backend-${STACK_SUFFIX}" "Name=instance-state-name,Values=running" --query 'Reservations[].Instances[].PublicIpAddress' --output text)
 
-              # Check if BACKEND_PUBLIC_IP is empty
-              if [ -z "$BACKEND_PUBLIC_IP" ]; then
-                echo "Error: No EC2 instances found with the specified tag."
-                exit 1
-              fi
+                if [ -z "$BACKEND_PUBLIC_IP" ]; then
+                  echo "Error: No running EC2 instances found with the specified stack tag: udapeople-backend-${STACK_SUFFIX}."
+                  exit 1
+                fi
 
-              echo "Retrieved BACKEND_PUBLIC_IP: $BACKEND_PUBLIC_IP"
+                echo "Retrieved BACKEND_PUBLIC_IP: $BACKEND_PUBLIC_IP"
 
-              # Set API URL
-              export API_URL=http://${BACKEND_PUBLIC_IP}:3030
+                export API_URL=http://${BACKEND_PUBLIC_IP}:3030
 
-              echo "API URL: $API_URL"
+                echo "Attempting to connect to API URL: $API_URL/api/status"
 
-              # Check API status
-              RESPONSE=$(curl -s $API_URL/api/status)
-              echo "API Response: $RESPONSE"
+                MAX_RETRIES=10 # Number of times to retry the connection
+                SLEEP_SECONDS=5 # Seconds to wait between retries
+                RETRY_COUNT=0
 
-              if echo "$RESPONSE" | grep "ok"; then
-                echo "Smoke test passed."
-                exit 0
-              else 
-                echo "Smoke test failed. 'ok' not found in API response."
-                exit 1 
-              fi 
+                # Retry loop to wait for the backend to become ready
+                while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+                  RETRY_COUNT=$((RETRY_COUNT + 1))
+                  echo "Attempt $RETRY_COUNT of $MAX_RETRIES..."
 
-                  
+                  # Use curl with options:
+                  # -s: Silent mode (don't show progress or error messages unless fatal)
+                  # -f: Fail fast (exit code 22) for HTTP errors like 404, 500
+                  # --connect-timeout 5: Timeout for the connection phase
+                  # --max-time 10: Maximum time the entire operation can take
+                  RESPONSE=$(curl -sf --connect-timeout 5 --max-time 10 ${API_URL}/api/status)
+                  CURL_STATUS=$? # Get the exit status of the curl command
 
-      - run:
-          name: Frontend smoke test.
-          command: |
-            URL="http://udapeople-${CIRCLE_WORKFLOW_ID:0:7}.s3-website.${AWS_DEFAULT_REGION}.amazonaws.com/#/employees"
-            echo ${URL}
-            if curl -s ${URL} | grep "Welcome"
-            then
-              echo SUCCESS
-              exit 0
-            else
-              echo FAIL
-              exit 1
-            fi
+                  if [ $CURL_STATUS -eq 0 ]; then
+                    # Curl succeeded (returned 0 exit code)
+                    echo "Curl request succeeded. Response: '$RESPONSE'"
+                    if echo "$RESPONSE" | grep -q "ok"; then
+                      # Check if the response body contains "ok"
+                      echo "Smoke test passed: 'ok' found in API response."
+                      exit 0 # Exit script successfully
+                    else
+                      # Curl succeeded, but response doesn't contain "ok". Might be wrong endpoint or wrong response structure.
+                      echo "Curl succeeded, but response body did not contain 'ok'. Retrying in case backend is still initializing..."
+                    fi
+                  else
+                    # Curl failed (non-zero exit code)
+                    echo "Curl request failed with exit status $CURL_STATUS. Retrying in case backend is not yet reachable or returned error."
+                    # Common curl status codes:
+                    # 6: Couldn't resolve host
+                    # 7: Failed to connect() to host or proxy
+                    # 22: HTTP page not retrieved (indicates a 4xx or 5xx status code on --fail)
+                    # 28: Operation timed out
+                  fi
+
+                  # If we haven't passed, sleep before the next retry (unless this is the last attempt)
+                  if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                    sleep $SLEEP_SECONDS
+                  fi
+                done
+
+                # If the loop finished without success, the smoke test failed
+                echo "Smoke test failed: Exhausted $MAX_RETRIES attempts without a successful connection or response containing 'ok'."
+                exit 1 # Exit script with failure status
+                
+          - run:
+              name: Frontend smoke test.
+              command: |
+                URL="http://udapeople-${CIRCLE_WORKFLOW_ID:0:7}.s3-website.${AWS_DEFAULT_REGION}.amazonaws.com/#/employees"
+                echo ${URL}
+                if curl -s ${URL} | grep "Welcome"
+                then
+                  echo SUCCESS
+                  exit 0
+                else
+                  echo FAIL
+                  exit 1
+                fi
  
 
 workflows:
