@@ -578,103 +578,36 @@ jobs:
       # # - revert-migrations
   smoke-test:
     docker:
-    - image: cimg/base:stable
+      - image: cimg/base:stable
     steps:
-    - checkout
-    - run:
-        name: Install dependencies
-        command: |
-          sudo apt update
-          sudo apt upgrade -y
-          sudo apt install -y curl awscli
-          aws --version
-    - run:
-        name: Backend smoke test
-        command: |
-          #!/bin/bash -eo pipefail
-
-          STACK_SUFFIX=${CIRCLE_WORKFLOW_ID:0:7}
-          BACKEND_PUBLIC_IP=$(aws ec2 describe-instances --filters "Name=tag:aws:cloudformation:stack-name,Values=udapeople-backend-${STACK_SUFFIX}" "Name=instance-state-name,Values=running" --query 'Reservations[].Instances[].PublicIpAddress' --output text)
-
-          if [ -z "$BACKEND_PUBLIC_IP" ]; then
-            echo "Error: No running EC2 instances found with the specified stack tag: udapeople-backend-${STACK_SUFFIX}."
-            exit 1
-          fi
-
-          echo "Retrieved BACKEND_PUBLIC_IP: $BACKEND_PUBLIC_IP"
-
-          export API_URL=http://${BACKEND_PUBLIC_IP}:3030
-
-          echo "Starting backend API smoke test with URL: ${API_URL}/api/status"
-
-          MAX_RETRIES=20 # Increased retries, backend might take longer
-          SLEEP_SECONDS=10 # Increased sleep time between retries
-          RETRY_COUNT=0
-
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            echo "Attempt $RETRY_COUNT of $MAX_RETRIES: Pinging ${API_URL}/api/status"
-
-            # Attempt the curl request
-            # -s: Silent mode
-            # --connect-timeout 10: Increased connect timeout
-            # --max-time 20: Increased max time for the whole operation
-            # 2>&1: Redirect stderr to stdout to capture error messages in the variable
-            CURL_OUTPUT=$(curl -s --connect-timeout 10 --max-time 20 ${API_URL}/api/status 2>&1)
-            CURL_STATUS=$? # Capture exit status of curl immediately
-
-            # Explicitly log the curl result
-            echo "  Curl command finished with exit status: $CURL_STATUS"
-            echo "  Curl output (response body or error message): '$CURL_OUTPUT'"
-
-            if [ $CURL_STATUS -eq 0 ]; then
-              # Curl succeeded, now check the response body
-              echo "  Curl request was successful (status 0)."
-              if echo "$CURL_OUTPUT" | grep -q "ok"; then
-                echo "Smoke test passed: Found 'ok' in the API response body."
-                exit 0 # Success! Exit the script
-              else
-                # Curl succeeded, but the response didn't have "ok"
-                echo "  Response did not contain 'ok'. Backend might be up but not fully ready or endpoint is wrong."
-              fi
+      - checkout
+      - install_awscli
+      - install_nodejs
+      - run:
+          name: Backend smoke test.
+          command: |
+            export BACKEND_IP=$(aws ec2 describe-instances \
+              --filters "Name=tag:Name, Values=backend-${CIRCLE_WORKFLOW_ID:0:7}" \
+              --query 'Reservations[*].Instances[*].PublicDnsName' --output text)
+            export API_URL="http://${BACKEND_IP}:3030"
+            echo "${API_URL}"
+            if curl "${API_URL}/api/status" | grep "ok"
+            then
+              exit 0
             else
-              # Curl failed
-              echo "  Curl request failed with status $CURL_STATUS. Cannot reach the API endpoint."
-              # Common failures:
-              # 6: Couldn't resolve host
-              # 7: Failed to connect() - often network/firewall issues or service not listening
-              # 28: Operation timed out
-              echo "  Possible causes: Backend service not running, firewall blocking access, incorrect IP/port."
+              exit 1
             fi
-
-            # If not successful and not the last retry, wait before retrying
-            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-              echo "  Waiting ${SLEEP_SECONDS}s before next attempt..."
-              sleep $SLEEP_SECONDS
-            fi
-          done # End of while loop
-
-          # If the loop finishes without exiting, it means all retries failed
-          echo "----------------------------------------------------"
-          echo "SMOKE TEST FAILED AFTER $MAX_RETRIES ATTEMPTS."
-          echo "The backend API did not become reachable at ${API_URL}/api/status or did not respond with 'ok'."
-          echo "Review the deployment logs for potential backend startup errors and ensure network/firewall rules allow access on port 3030 from CircleCI."
-          echo "Last attempt status: $CURL_STATUS"
-          echo "Last attempt output: '$CURL_OUTPUT'"
-          exit 1 # Indicate failure
-
-    - run:
-        name: Frontend smoke test.
-        command: |
-            URL="http://udapeople-${CIRCLE_WORKFLOW_ID:0:7}.s3-website.${AWS_DEFAULT_REGION}.amazonaws.com/#/employees"
-            echo ${URL}
+      - run:
+          name: Frontend smoke test.
+          command: |
+            URL="http://udapeople-${CIRCLE_WORKFLOW_ID:0:7}.s3-website-us-east-1.amazonaws.com/#/employees"            
+            echo ${URL} 
             if curl -s ${URL} | grep "Welcome"
             then
-            echo SUCCESS
-            exit 0
+                # Change this to 0 after the job fails
+              exit 0
             else
-            echo FAIL
-            exit 1
+              exit 1
             fi
  
 
