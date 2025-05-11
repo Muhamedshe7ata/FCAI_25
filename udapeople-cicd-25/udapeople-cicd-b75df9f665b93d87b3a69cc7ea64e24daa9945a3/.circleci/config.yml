@@ -1,0 +1,601 @@
+version: 2.1
+commands:
+  install_awscli:
+    description: Install AWS CLI v2
+    steps:
+      - run:
+          name: Install AWS CLI v2
+          command: |
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+
+  install_ansible:
+    description: Install Ansible
+    steps:
+      - run:
+          name: Install Ansible 
+          command: |
+            sudo apt update
+            sudo apt install software-properties-common -y
+            sudo add-apt-repository --yes --update ppa:ansible/ansible
+            sudo apt install ansible -y
+
+  install_nodejs:
+    description: Install Node.js 13
+    steps:
+    - run:
+        name: Install Node.js 13
+        command: |
+          curl -fsSL https://deb.nodesource.com/setup_13.x | sudo -E bash -
+          sudo apt install -y nodejs
+   
+
+  destroy-environment:
+    description: Destroy back-end and front-end cloudformation stacks given a workflow ID.
+    parameters:
+      Workflow_ID:
+        type: string
+        default: ${CIRCLE_WORKFLOW_ID:0:7}
+    steps:
+      - run:
+          name: Destroy environments
+          # Consider if 'when: on_fail' is truly what you want for the destroy logic
+          # If you always want to run this destroy step when the command is called, remove 'when: on_fail'
+          when: on_fail
+          command: |
+            echo "Attempting to destroy environment: << parameters.Workflow_ID >>" # Added for clarity
+            aws cloudformation delete-stack --stack-name udapeople-backend-<< parameters.Workflow_ID >> || echo "Failed to delete backend stack or stack does not exist."
+            aws s3 rm s3://udapeople-<<parameters.Workflow_ID>> --recursive || echo "Failed to remove S3 bucket or bucket does not exist."
+            aws cloudformation delete-stack --stack-name udapeople-frontend-<< parameters.Workflow_ID >> || echo "Failed to delete frontend stack or stack does not exist."
+      # --- REMOVE THE LINE BELOW ---
+      # - destroy-environment
+
+      # --- Consider if this persist step really belongs in the destroy command ---
+      # Usually, you persist data needed by *later* jobs. Destroy is often the *last* thing.
+      - persist_to_workspace:
+          root: ~/
+          paths:
+           - project/.circleci/ansible/inventory.txt
+
+  revert-migrations:
+    description: Revert database migrations
+    parameters:
+      Workflow_ID:
+        type: string
+        default: ${CIRCLE_WORKFLOW_ID:0:7}
+        description: "The workflow ID (or relevant part) to check migration status against."
+    steps:
+      - run:
+          name: Revert migrations
+          when: on_fail
+          command: |
+            SUCCESS=$(curl --insecure https://kvdb.io/${KVDB_BUCKET}/migration_ << parameters.Workflow_ID >>)
+            # Logic for reverting the database state
+            if [[ $SUCCESS -eq 1 ]]; then
+              cd ~/project/backend
+              npm install
+              npm run migration:revert
+            fi
+
+            
+jobs:
+  build-frontend:
+    docker:
+      - image: cimg/node:13.8.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys: [frontend-deps]
+      - run:
+          name: Build front-end
+          command: |
+             cd frontend
+              npm install
+              npm run build
+
+      - save_cache:
+          paths: [frontend/node_modules]
+          key: frontend-deps
+      # - notify_on_failure
+  build-backend:
+    docker:
+      - image: cimg/node:13.8.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys: [backend-deps]
+      - run:
+          name: Back-end build
+          command: |
+            cd backend
+            npm install
+            npm run build
+      - save_cache:
+          paths: [backend/node_modules]
+          key: backend-deps
+      # - notify_on_failure
+
+  test-frontend:
+    docker:
+
+      - image: cimg/node:13.8.0
+    steps:
+      - checkout 
+      - restore_cache:
+          keys: [frontend-deps]
+      - run:
+          name: Front-end Unit Test
+          command: |
+            cd frontend
+            npm install
+            npm test
+      # - notify_on_failure
+   
+                
+  test-backend:
+    docker:
+      - image: cimg/node:13.8.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys: [backend-deps]
+      - run:
+          name: Back-end  Unit Test
+          command: |
+            cd backend
+            npm install
+            npm test
+      # - notify_on_failure
+
+
+            
+  scan-frontend:
+    docker:
+      - image: cimg/node:13.8.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys: [frontend-deps]
+      - run:
+          name: Front-end  scan
+          command: |
+            cd frontend
+            npm install
+            npm audit --audit-level=critical || true
+      # - notify_on_failure
+  scan-backend:
+    docker:
+      - image: cimg/node:13.8.0
+    steps:
+      
+      - checkout
+      - restore_cache:
+          keys: [backend-deps]
+      - run:
+          name: Back-end security scan
+          command: |
+            cd backend
+            npm install
+            npm audit fix --force --audit-level=critical
+            npm audit fix --force --audit-level=critical
+            npm audit --audit-level=critical
+     
+  deploy-infrastructure:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - run:
+          name: Install AWS CLI
+          command: |
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+      - run:
+          name: Ensure back-end infrastructure exists
+          command: |
+            aws cloudformation deploy \
+              --template-file .circleci/files/backend.yml \
+              --tags project=udapeople\
+              --stack-name "udapeople-backend-${CIRCLE_WORKFLOW_ID:0:7}" \
+              --parameter-overrides ID="${CIRCLE_WORKFLOW_ID:0:7}"  
+              
+      - run:
+          name: Ensure front-end infrastructure exist
+          command: |
+            aws cloudformation deploy \
+              --template-file .circleci/files/frontend.yml \
+              --tags project=your-tag \
+              --stack-name "udapeople-frontend-$(echo "${CIRCLE_WORKFLOW_ID:0:7}" | tr '[:upper:]' '[:lower:]')" \
+              --parameter-overrides ID=$(echo "${CIRCLE_WORKFLOW_ID:0:7}" | tr '[:upper:]' '[:lower:]')  
+              
+      # - run:
+      #     name: Add back-end ip to ansible inventory
+      #     command: |  
+      #       BACKEND_PUBLIC_IP=$(aws ec2 describe-instances \
+      #         --filters "Name=tag:Name,Values=backend-${CIRCLE_WORKFLOW_ID:0:7}" \
+      #         --query 'Reservations[*].Instances[*].PublicIpAddress' \
+      #         --output text)
+      #       echo $BACKEND_PUBLIC_IP >> .circleci/ansible/inventory.txt
+      #       cat .circleci/ansible/inventory.txt
+      # - persist_to_workspace:
+      #     root: ~/
+      #     paths:
+      #       - project/.circleci/ansible/inventory.txt
+      #  # - destroy-environment
+      - run:
+         name: Add back-end ip to ansible inventory
+         command: |
+
+                    echo "Attempting to fetch IP for tag: Name=backend-${CIRCLE_WORKFLOW_ID:0:7}"
+       
+                    BACKEND_PUBLIC_IP=$(aws ec2 describe-instances \
+                      --filters "Name=tag:Name,Values=backend-${CIRCLE_WORKFLOW_ID:0:7}" \
+                      --query 'Reservations[*].Instances[*].PublicIpAddress' \
+                      --output text)
+
+                    echo "IP Address Fetched: [$BACKEND_PUBLIC_IP]" # Debug echo
+
+                    # Create/Overwrite the inventory file with the group header
+                    # Make sure the path here is correct relative to the project root
+                    echo "[web]" > .circleci/ansible/inventory.txt
+
+                    # Append the fetched IP address to the inventory file
+                    echo "$BACKEND_PUBLIC_IP" >> .circleci/ansible/inventory.txt
+
+                    echo "Final contents of inventory file in this step:"
+                    # Make sure the path here is correct relative to the project root
+                    cat .circleci/ansible/inventory.txt        
+                              
+                    
+            
+ 
+
+      - persist_to_workspace:
+          root: . # This root is fine
+          paths:
+            - .circleci/ansible/inventory.txt # This path seems correct assuming your working_directory is ~/project
+      
+###################
+  configure-infrastructure:
+    docker:
+      - image: cimg/base:stable # Or similar base image
+    steps:
+      - checkout
+      - install_ansible # This seems to be a custom or orb step
+      - add_ssh_keys:
+          fingerprints: ["SHA256:FJogcncZoAfN0hgvqhqDgAiiOafEii9G+HsAStU+Ok4"] # Placeholder for your actual fingerprint
+      - attach_workspace:
+          at: ~/
+      - run:
+          name: Configure Server
+          command: |
+            cd .circleci/ansible
+            cat inventory.txt # This line was added to show the inventory content
+            ansible-playbook -i inventory.txt configure-server.yml
+  run-migrations:
+    docker:
+      - image:  cimg/node:13.8.0
+    steps:
+      - checkout
+      - install_awscli
+      - restore_cache:
+          keys: [backend-build]
+      - run:
+          name: prepare environment for backend build
+          command: |
+            echo "ENVIRONMENT=production" > backend/.env
+            echo "VERSION=1" >> backend/.env
+            echo "TYPEORM_CONNECTION=postgres" >> backend/.env
+            echo "TYPEORM_MIGRATIONS_DIR=./src/migrations" >> backend/.env
+            echo "TYPEORM_ENTITIES=./src/modules/domain/**/*.entity.ts" >> backend/.env
+            echo "TYPEORM_MIGRATIONS=./src/migrations/*.ts" >> backend/.env
+            echo "TYPEORM_HOST=${TYPEORM_HOST}" >> backend/.env
+            echo "TYPEORM_PORT=${TYPEORM_PORT}" >> backend/.env
+            echo "TYPEORM_USERNAME=${TYPEORM_USERNAME}" >> backend/.env
+            echo "TYPEORM_PASSWORD=${TYPEORM_PASSWORD}" >> backend/.env
+            echo "TYPEORM_DATABASE=${TYPEORM_DATABASE}" >> backend/.env
+            echo "DB_SSL=${DB_SSL}" >> backend/.env
+            echo "NODE_TLS_REJECT_UNAUTHORIZED=${NODE_TLS_REJECT_UNAUTHORIZED}" >> backend/.env
+            echo "PGSSLMODE=require" >> backend/.env
+      - run:
+          name: Install dependencies
+          command: |
+            export DEBIAN_FRONTEND=noninteractive
+          
+            sudo apt update
+            sudo apt install -y awscli curl
+            
+      - run:
+          name: Run migrations
+          command: |
+            cd backend
+            npm ci
+            if [ -f .env ]; then
+              export $(grep -v '^#' .env | xargs)
+            fi
+            if [ -z "${KVDB_BUCKET}" ]; then
+              echo "ERROR: KVDB_BUCKET environment variable is not set. Cannot update KVDB."
+              exit 1
+            fi
+            npm run migrations > ./migrations_dump.txt 2>&1
+            migration_status_code=$?
+            cat ./migrations_dump.txt
+            if [[ "${migration_status_code}" -ne 0 ]]; then
+              echo "ERROR: 'npm run migrations' command failed with exit code ${migration_status_code}."
+              exit "${migration_status_code}"
+            fi
+            echo "Migration command completed successfully (exit code 0). Checking output for success messages..."
+            if grep -E -q "has been executed successfully.|No migrations are pending" ./migrations_dump.txt; then
+              echo "Found expected success message ('migration executed' or 'no migrations pending') in log."
+              echo "--- Updating KVDB status key ---"
+              curl -sf -X PUT \
+                "https://kvdb.io/${KVDB_BUCKET}/migration_${CIRCLE_WORKFLOW_ID:0:7}" \
+                -d '1' || {
+                  curl_exit_code=$?
+                  echo "ERROR: curl command failed to update kvdb.io with exit code ${curl_exit_code}."
+                  echo "Check network connectivity, KVDB_BUCKET value ('${KVDB_BUCKET}'), and kvdb.io service status."
+                  exit $curl_exit_code
+                }
+              echo "KVDB status updated successfully via curl."
+            else
+              echo "WARNING: Migration command succeeded (exit code 0), but NEITHER 'has been executed successfully.' NOR 'No migrations are pending' was found in the output."
+              echo "Skipping KVDB update due to unrecognized success output."
+            fi
+            echo "Migration and KVDB update check process finished successfully."
+      - destroy-environment
+      - revert-migrations
+
+
+             
+        
+
+  deploy-frontend:
+    docker: 
+    - image: cimg/base:stable
+    steps:
+      - checkout
+      - install_awscli
+      - install_nodejs
+      - restore_cache:
+          keys: [frontend-deps]
+      - run:
+          name: Install dependencies
+          command: |
+            cd frontend
+            npm install
+      - run:
+          name: Get backend url
+          command: |
+            BACKEND_PUBLIC_IP=$(aws ec2 describe-instances \
+              --filters "Name=tag:Name,Values=backend-${CIRCLE_WORKFLOW_ID:0:7}" \
+              --query 'Reservations[*].Instances[*].PublicIpAddress' \
+              --output text)
+
+            echo "API_URL=http://${BACKEND_PUBLIC_IP}:3030" >> frontend/.env
+            cat frontend/.env
+      - run:
+          name: Deploy frontend objects
+          command: |
+            cd frontend
+            npm run build
+            aws s3 cp dist s3://udapeople-${CIRCLE_WORKFLOW_ID:0:7} --recursive
+
+  
+  deploy-backend:
+   
+    docker:
+    - image: cimg/base:stable
+    steps:
+      - checkout
+      - install_awscli
+      - install_ansible
+      - install_nodejs
+      - add_ssh_keys:
+          fingerprints: [" SHA256:FJogcncZoAfN0hgvqhqDgAiiOafEii9G+HsAStU+Ok4"]
+      - attach_workspace:
+          at: .
+      - restore_cache:
+          keys: [backend-deps]
+      - run:
+          name: Install dependencies
+          command: |
+            cd backend
+            npm install
+
+             
+      - run:
+          name: Package Backend
+          command: |
+            echo "--- Starting Package Backend Step ---"
+            echo "Current directory: $(pwd)"
+            ls -la # See project root contents
+
+            echo "Changing to backend/ directory..."
+            cd backend
+            echo "Current directory is now: $(pwd)"
+
+            echo "Listing contents of backend/ directory BEFORE build:"
+            ls -la # See what's here initially (node_modules might exist from caching)
+
+            echo "Ensuring node_modules are installed (running npm install)..."
+            npm install # Make sure dependencies are there for the build
+
+            echo "Running npm run build (which should execute tsc)..."
+            npm run build # This is where 'dist/' should be created
+
+            echo "Build finished. Checking for dist/ directory..."
+            if [ -d "dist" ]; then
+              echo "SUCCESS: dist/ directory was created."
+              echo "Contents of dist/ directory:"
+              ls -la dist # CRITICAL: See if main.js is here
+              
+              # Specific check for main.js (or your entry file)
+              if [ -f "dist/main.js" ]; then
+                echo "SUCCESS: dist/main.js exists!"
+              else
+                echo "ERROR: dist/main.js DOES NOT EXIST. Check your tsc build and tsconfig.json outDir."
+                # Consider exiting with an error if main.js is crucial and missing
+                # exit 1 
+              fi
+            else
+              echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+              echo "CRITICAL ERROR: dist/ directory was NOT created by npm run build!"
+              echo "This means 'tsc' (TypeScript compiler) did not produce output to a 'dist' folder."
+              echo "Check your 'package.json' build script and 'tsconfig.json' (especially 'outDir')."
+              echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+              exit 1 # Definitely exit if dist isn't created
+            fi
+
+            echo "Checking for ecosystem.config.js before tarring..."
+            if [ -f "ecosystem.config.js" ]; then
+              echo "ecosystem.config.js found in backend/ root."
+              echo "Running tar command including ecosystem.config.js..."
+              tar -czf artifact.tar.gz dist/* package* ecosystem.config.js
+            else
+              echo "WARNING: ecosystem.config.js not found in backend/ root."
+              echo "Running tar command WITHOUT ecosystem.config.js (this might cause PM2 issues later)..."
+              tar -czf artifact.tar.gz dist/* package*
+            fi
+            
+            echo "Checking if artifact.tar.gz was created:"
+            ls -la artifact.tar.gz
+
+            echo "Listing contents of artifact.tar.gz (to verify inclusion):"
+            tar -tzf artifact.tar.gz # List contents of the tarball
+
+            echo "Changing back to project root..."
+            cd ..
+            echo "Current directory is now: $(pwd)"
+            
+            echo "Creating Ansible target directory if it doesn't exist..."
+            mkdir -p .circleci/ansible/roles/deploy/files
+            
+            echo "Copying artifact..."
+            cp backend/artifact.tar.gz .circleci/ansible/roles/deploy/files
+            
+            echo "Verifying artifact in target directory:"
+            ls -la .circleci/ansible/roles/deploy/files/artifact.tar.gz
+            echo "--- Finished Package Backend Step ---"
+
+      - run:
+          name: Deploy backend
+          command: |
+            # Export environment variables (Keep these as they are)
+            export TYPEORM_MIGRATIONS_DIR=./migrations
+            export TYPEORM_ENTITIES=./modules/domain/**/*.entity{.ts,.js}
+            export TYPEORM_MIGRATIONS=./migrations/*.ts
+
+            echo "Checking for artifact file before running Ansible:"
+            ls -la .circleci/ansible/roles/deploy/files/artifact.tar.gz
+
+            # --- Removed 'cd .circleci/ansible' command ---
+            # --- Removed debug echo/ls commands as they are no longer needed here ---
+
+            # --- Run ansible-playbook from the project root ---
+            # --- Using paths relative to the project root ---
+            echo "Running Ansible Playbook from Project Root"
+            ansible-playbook -i .circleci/ansible/inventory.txt .circleci/ansible/deploy-backend.yml
+
+      # - destroy-environment
+      # - revert-migrations
+  smoke-test:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - run:
+          name: Install dependencies
+          command: |
+            sudo apt update
+            sudo apt upgrade -y
+            sudo apt install -y curl
+            sudo apt install -y awscli
+            aws --version
+      - run:
+          name: Backend smoke test.
+          command: |       
+              #!/bin/bash -eo pipefail
+              STACK_SUFFIX=${CIRCLE_WORKFLOW_ID:0:7}
+              BACKEND_PUBLIC_IP=$(aws ec2 describe-instances \
+               --filters "Name=tag:aws:cloudformation:stack-name,Values=udapeople-backend-${STACK_SUFFIX}" "Name=instance-state-name,Values=running" \
+              --query 'Reservations[].Instances[].PublicIpAddress' \
+              --output text)
+
+              # Check if BACKEND_PUBLIC_IP is empty
+              if [ -z "$BACKEND_PUBLIC_IP" ]; then
+                echo "Error: No EC2 instances found with the specified tag."
+                exit 1
+              fi
+
+              echo "Retrieved BACKEND_PUBLIC_IP: $BACKEND_PUBLIC_IP"
+
+              # Set API URL
+              export API_URL=http://${BACKEND_PUBLIC_IP}:3030
+
+              echo "API URL: $API_URL"
+
+              # Check API status
+              RESPONSE=$(curl -s $API_URL/api/status)
+              echo "API Response: $RESPONSE"
+
+              if echo "$RESPONSE" | grep "ok"; then
+                echo "Smoke test passed."
+                exit 0
+              else 
+                echo "Smoke test failed. 'ok' not found in API response."
+                exit 1 
+              fi 
+
+                  
+
+      - run:
+          name: Frontend smoke test.
+          command: |
+            URL="http://udapeople-${CIRCLE_WORKFLOW_ID:0:7}.s3-website.${AWS_DEFAULT_REGION}.amazonaws.com/#/employees"
+            echo ${URL}
+            if curl -s ${URL} | grep "Welcome"
+            then
+              echo SUCCESS
+              exit 0
+            else
+              echo FAIL
+              exit 1
+            fi
+ 
+
+workflows:
+  default:
+    jobs:
+      - build-frontend
+      - build-backend
+      - test-frontend:
+          requires: [build-frontend]
+      - test-backend:
+          requires: [build-backend]
+      - scan-backend:
+          requires: [build-backend]
+      - scan-frontend:
+          requires: [build-frontend]
+ 
+      - deploy-infrastructure:
+          requires: [test-frontend, test-backend, scan-frontend, scan-backend]
+          filters:
+            branches:
+              only: [master]
+      - configure-infrastructure:
+          requires: [deploy-infrastructure]
+      - run-migrations:
+          requires: [configure-infrastructure]
+      - deploy-frontend:
+          requires: [run-migrations]
+      - deploy-backend:
+          requires: [run-migrations]
+      - smoke-test:
+          requires: [deploy-backend, deploy-frontend]
+   #######   # - cloudfront-update:###################
+      #     requires: [smoke-test]
+      # - cleanup:
+      #     requires: [cloudfront-update]
+
