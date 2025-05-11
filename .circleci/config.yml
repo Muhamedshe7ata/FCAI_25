@@ -407,108 +407,162 @@ jobs:
              
        # Inside your .circleci/config.yml, within the 'jobs' -> <your-job-name> -> 'steps' section
 
-      - run:
-          name: Package Backend
-          command: |
-            echo "--- Starting Package Backend Step ---"
-            echo "Current directory: $(pwd)"
-            ls -la # See project root contents
-
-            echo "Changing to backend/ directory..."
-            cd backend
-            echo "Current directory is now: $(pwd)"
-
-            echo "Listing contents of backend/ directory BEFORE build:"
-            ls -la # See what's here initially (node_modules might exist from caching)
-
-            echo "Ensuring node_modules are installed (running npm install)..."
-            npm install --production=false # Optional: ensures dev deps are installed for the build, production=false avoids reinstalling deps meant for the server
-
-            echo "Running npm run build (which should execute tsc)..."
-            npm run build # This is where 'dist/' should be created. **MAKE SURE this script exists in backend/package.json!**
-
-             echo "Build finished. Checking for dist/ directory..."
-            if [ -d "dist" ]; then
-             echo "SUCCESS: dist/ directory was created."
-            echo "Contents of dist/ directory:"
-             ls -la dist # Shows main.js
-
-         
-             if [ -f "dist/main.js" ]; then  
-             echo "SUCCESS: dist/main.js exists! This is your application entry point."
-             else
-             echo "ERROR: dist/main.js DOES NOT EXIST inside the built 'dist' directory."
-             echo "Check your 'package.json' build script, 'tsconfig.json outDir', and backend entry file name."
-            exit 1 # Definitely exit if the expected main built file isn't created
-            fi
-     
-            else
-              echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-              echo "CRITICAL ERROR: 'dist/' directory was NOT created by 'npm run build'!"
-              echo "This means your backend compilation/build step failed or is misconfigured."
-              echo "Check your 'package.json' build script and 'tsconfig.json'."
-              echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-              exit 1 # Definitely exit if dist isn't created
-            fi
-
-            echo "Checking for ecosystem.config.js before tarring..."
-            if [ -f "ecosystem.config.js" ]; then
-              echo "ecosystem.config.js found in backend/ root."
-              echo "Running tar command including ecosystem.config.js..."
-              # **Potential Fix 2: Include the 'dist/' DIRECTORY, not just its contents ('dist/*').**
-              # This ensures that when unarchived on the server, the structure 'backend-app/dist/server.js' is preserved,
-              # matching the path PM2 looks for (./dist/server.js relative to backend-app directory).
-              # Also, ensure 'package.json' and 'package-lock.json' (from package*) are included for server dependency install/verify.
-              tar -czf artifact.tar.gz dist/ package* ecosystem.config.js # <-- Added '/' to dist and ensured package* included
-
-            else
-              echo "WARNING: ecosystem.config.js not found in backend/ root. (This might cause issues later with PM2)."
-              echo "Running tar command WITHOUT ecosystem.config.js..."
-               # **Apply Fix 2 here as well:**
-              tar -czf artifact.tar.gz dist/ package* # <-- Added '/' to dist and ensured package* included
-            fi
-            
-            echo "Checking if artifact.tar.gz was created in backend/:"
-            ls -la artifact.tar.gz || echo "Error: artifact.tar.gz was not created!" && exit 1 # Fail if tar failed
-
-            echo "Listing contents of artifact.tar.gz (to verify inclusion and structure):"
-            tar -tzf artifact.tar.gz 
-
-            echo "Changing back to project root..."
-            cd ..
-            echo "Current directory is now: $(pwd)"
-            
-            echo "Creating Ansible target directory if it doesn't exist..."
-            # Assuming .circleci/ansible/roles/deploy/files exists or will be handled
-            # mkdir -p .circleci/ansible/roles/deploy/files # This line is likely fine but can uncomment if needed
-
-            # **Fix: Update the source path to copy artifact.tar.gz FROM the backend directory**
-            # It was created in ./backend/artifact.tar.gz
-            echo "Copying artifact from backend/ to Ansible files directory..."
-            cp backend/artifact.tar.gz .circleci/ansible/roles/deploy/files/ # <-- Source path was missing 'backend/'
-
-            echo "Verifying artifact in target directory:"
-            ls -la .circleci/ansible/roles/deploy/files/artifact.tar.gz || echo "Error: Artifact copy failed!" && exit 1 # Fail if copy failed
-            echo "--- Finished Package Backend Step ---"
+      # Inside your .circleci/config.yml, within the 'jobs' -> <your-job-name> -> 'steps' section
 
       - run:
-          name: Deploy backend
-          command: |
-            # Export environment variables (Keep these as they are)
-            export TYPEORM_MIGRATIONS_DIR=./migrations
-            export TYPEORM_ENTITIES=./modules/domain/**/*.entity{.ts,.js}
-            export TYPEORM_MIGRATIONS=./migrations/*.ts
+            name: Package Backend
+            command: |
+              # --- Configure shell options ---
+              #!/bin/bash -eo pipefail
+              # Use '-e' to exit immediately if a command exits with a non-zero status.
+              # Use '-o pipefail' to fail if any command in a pipeline fails.
 
-            echo "Checking for artifact file before running Ansible:"
-            ls -la .circleci/ansible/roles/deploy/files/artifact.tar.gz
+              echo "--- Starting Package Backend Step ---"
+              echo "Current directory (project root): $(pwd)"
+              # We assume CircleCI checked out the project to this location.
 
-            # --- Removed 'cd .circleci/ansible' command ---
-            # --- Removed debug echo/ls commands as they are no longer needed here ---
+              # --- Change directory to backend ---
+              echo "Changing to backend/ directory..."
+              # Use 'if ! command; then error && exit; fi' structure for robust error handling
+              if ! cd backend; then
+                echo "ERROR: Failed to change directory to ./backend!" >&2 # Output error to stderr
+                exit 1
+              fi
+              echo "Current directory is now: $(pwd)"
+              echo "Listing contents of backend/ directory:"
+              ls -la # Show files/folders inside the backend directory
 
-            # --- Run ansible-playbook from the project root ---
-            # --- Using paths relative to the project root ---
-            echo "Running Ansible Playbook from Project Root"
-            ansible-playbook -i .circleci/ansible/inventory.txt .circleci/ansible/deploy-backend.yml
+              # --- Install Node Dependencies ---
+              echo "Ensuring dependencies are installed (running npm install --production=false)..."
+              # '--force-consistent-casing=false' is a common workaround for case-sensitivity issues on some file systems/zip tools, safer for CI.
+              # '--production=false' ensures devDependencies are installed, which are often needed for the build process (like TypeScript).
+              if ! npm install --force-consistent-casing=false --production=false; then
+                echo "ERROR: 'npm install --production=false' failed!" >&2
+                exit 1
+              fi
+
+              # --- Run Backend Build ---
+              echo "Running npm run build (which should execute tsc)..."
+              # Make sure your backend's package.json has a 'build' script that runs your compiler (e.g., tsc).
+              if ! npm run build; then
+                echo "ERROR: 'npm run build' failed!" >&2
+                exit 1
+              fi
+
+              echo "Build finished. Checking for built output directory (dist/)..."
+              # --- Check for the output directory ---
+              if [ -d "dist" ]; then
+                echo "SUCCESS: 'dist/' directory was created by the build."
+                echo "Contents of dist/ directory:"
+                ls -la dist
+
+                # *** Crucial Check: Does the expected entry file exist in the build output? ***
+                # BASED ON PREVIOUS LOGS, your build outputs dist/main.js
+                # PM2 WILL LOOK FOR THE SCRIPT SPECIFIED IN ecosystem.config.js (hopefully main.js now)
+                BUILD_ENTRY_FILE="dist/main.js" # <--- SET THIS TO THE FILE YOUR BUILD ACTUALLY CREATES
+
+                if [ -f "$BUILD_ENTRY_FILE" ]; then
+                  echo "SUCCESS: Expected build entry file '$BUILD_ENTRY_FILE' exists."
+                else
+                  echo "ERROR: Expected build entry file '$BUILD_ENTRY_FILE' DOES NOT EXIST inside 'dist/' directory." >&2
+                  echo "Check your backend's 'package.json' build script, 'tsconfig.json outDir', and entry file name." >&2
+                  exit 1
+                fi
+              else
+                echo "CRITICAL ERROR: 'dist/' directory was NOT created by 'npm run build'!" >&2
+                echo "This means your backend compilation/build step failed or is misconfigured." >&2
+                echo "Check your backend's 'package.json' build script and 'tsconfig.json'." >&2
+                exit 1
+              fi
+
+              # --- Check for ecosystem.config.js before packaging ---
+              BACKEND_ARTIFACT_NAME="artifact.tar.gz" # Consistent name for the tarball
+              # List the files that should be included in the artifact tarball
+              TAR_INCLUDES="dist/ package.json package-lock.json" # Always include build output and package files
+              if [ -f "ecosystem.config.js" ]; then
+                echo "ecosystem.config.js found. Including it in the artifact."
+                TAR_INCLUDES="$TAR_INCLUDES ecosystem.config.js" # Add if found
+              else
+                echo "WARNING: ecosystem.config.js not found in backend/ root. (Ansible deploy step might fail later)." >&2
+                # We'll still tar without it, but Ansible might complain if it's needed for PM2
+                # The check in the deploy step for ecosystem.config.js presence on server might need to be adjusted or skipped if it's truly optional
+              fi
+
+              echo "Running tar command to create '$BACKEND_ARTIFACT_NAME' in ./backend/ ..."
+              echo "Tar command includes: $TAR_INCLUDES"
+              # Running tar from the backend/ directory
+              # Using '--warning=no-file-ignored' to avoid verbose warnings if node_modules are excluded by .gitignore etc.
+              if ! tar --warning=no-file-ignored -czf "$BACKEND_ARTIFACT_NAME" $TAR_INCLUDES; then
+                echo "ERROR: 'tar' command failed!" >&2
+                exit 1 # Exit if tar failed
+              fi
+              echo "Successfully created '$BACKEND_ARTIFACT_NAME' in ./backend/."
+
+              # --- Verify the created artifact file exists and check its contents ---
+              # Log cuts off around here, let's verify the file exists
+              if [ ! -f "$BACKEND_ARTIFACT_NAME" ]; then
+                  echo "CRITICAL ERROR: Artifact file '$BACKEND_ARTIFACT_NAME' was not created by tar!" >&2
+                  exit 1
+              fi
+              echo "Artifact file '$BACKEND_ARTIFACT_NAME' verified to exist in ./backend."
+              ls -lh "$BACKEND_ARTIFACT_NAME" # Show its size clearly
+
+              echo "Verifying contents and structure of '$BACKEND_ARTIFACT_NAME'..."
+              # 'tar -tzf' lists contents. Piping to /dev/null is okay for just checking exit status.
+              if ! tar -tzf "$BACKEND_ARTIFACT_NAME" > /dev/null; then
+                  echo "ERROR: Verifying contents of artifact file failed ('tar -tzf' returned non-zero)!" >&2
+                  exit 1 # Exit if tar -tzf failed
+              fi
+              echo "Artifact contents verification successful." # Log should now get here if tar -tzf passed
+
+
+              # --- Change directory back to project root ---
+              echo "Changing back to project root directory..."
+              if ! cd ..; then
+                echo "ERROR: Failed to change directory back to project root (from backend/)!" >&2
+                exit 1
+              fi
+              echo "Current directory is now: $(pwd)" # Should be /home/circleci/project
+
+              # --- Create Ansible artifact target directory (if needed) ---
+              # This is where the deploy playbook expects the artifact to be found.
+              # Path is relative to the project root.
+              ANSIBLE_FILES_DIR=".circleci/ansible/roles/deploy/files"
+              echo "Ensuring Ansible artifact target directory '$ANSIBLE_FILES_DIR' exists..."
+              # mkdir -p: Creates parent directories if needed, doesn't error if dir exists.
+              if ! mkdir -p "$ANSIBLE_FILES_DIR"; then
+                echo "ERROR: Failed to create Ansible files directory '$ANSIBLE_FILES_DIR'!" >&2
+                exit 1
+              fi
+              # Verify the directory exists (optional but adds robustness)
+              if [ ! -d "$ANSIBLE_FILES_DIR" ]; then
+                  echo "CRITICAL ERROR: Ansible files directory '$ANSIBLE_FILES_DIR' does not exist after mkdir -p!" >&2
+                  exit 1
+              fi
+              echo "Ansible target directory '$ANSIBLE_FILES_DIR' verified to exist."
+
+              # --- Copy the created artifact to the Ansible target directory ---
+              # Source path is relative to current dir (project root), file is in ./backend
+              # Destination path is relative to current dir (project root)
+              echo "Copying artifact from ./backend/'$BACKEND_ARTIFACT_NAME' to './$ANSIBLE_FILES_DIR/'"
+              if ! cp backend/"$BACKEND_ARTIFACT_NAME" "$ANSIBLE_FILES_DIR"/; then
+                echo "ERROR: Copying artifact file '$BACKEND_ARTIFACT_NAME' to '$ANSIBLE_FILES_DIR/' failed!" >&2
+                exit 1 # Exit if copy failed
+              fi
+              echo "Artifact file copied successfully."
+
+              # --- Final verification in the target directory ---
+              echo "Verifying artifact is in the final target directory:"
+              if [ -f "$ANSIBLE_FILES_DIR/$BACKEND_ARTIFACT_NAME" ]; then
+                echo "SUCCESS: Final artifact file '$ANSIBLE_FILES_DIR/$BACKEND_ARTIFACT_NAME' found and verified."
+                ls -lh "$ANSIBLE_FILES_DIR/$BACKEND_ARTIFACT_NAME" # Show final file
+              else
+                echo "CRITICAL ERROR: Final artifact file '$ANSIBLE_FILES_DIR/$BACKEND_ARTIFACT_NAME' NOT FOUND after copy!" >&2
+                exit 1
+              fi
+
+              echo "--- Finished Package Backend Step ---"
+              # The script should naturally exit with status 0 if it reaches here
 
       # - destroy-environment
       # - revert-migrations
