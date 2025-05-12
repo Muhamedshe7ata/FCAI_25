@@ -286,7 +286,8 @@ jobs:
       - checkout
       - install_awscli # NEED THIS HERE TO FETCH IP
       - install_ansible
-      # ... potentially add_ssh_keys ...
+      - add_ssh_keys:
+          fingerprints: ["SHA256:FJogcncZoAfN0hgvqhqDgAiiOafEii9G+HsAStU+Ok4"]
 
       # --- NEW DEBUG/DYNAMIC INVENTORY RUN STEP ---
       - run:
