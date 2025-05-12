@@ -20,9 +20,10 @@
   shell: |
     cd /home/ubuntu/backend/dist
     pm2 stop default
-    pm2 start -f main.js
+    pm2 start npm -- start
+    # pm2 start -f main.js
 
-    
+
 # ---
 # # tasks file for deploy role
 
