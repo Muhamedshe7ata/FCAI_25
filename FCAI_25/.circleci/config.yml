@@ -54,7 +54,7 @@ commands:
       # --- Consider if this persist step really belongs in the destroy command ---
       # Usually, you persist data needed by *later* jobs. Destroy is often the *last* thing.
       - persist_to_workspace:
-          root: ~/
+          root: ~/project
           paths:
            - project/.circleci/ansible/inventory.txt
 
@@ -248,7 +248,15 @@ jobs:
                     # Make sure the path here is correct relative to the project root
                     cat .circleci/ansible/inventory.txt        
                               
-                    
+      - run:
+          name: Debug - Check Inventory Before Persist
+          command: |
+            echo "--- Content of inventory.txt before persisting ---"
+            cat ~/project/.circleci/ansible/inventory.txt || echo "File not found before persisting!"
+            echo "--------------------------------------------------"
+            echo "--- Files in .circleci/ansible before persisting ---"
+            ls -la ~/project/.circleci/ansible/ || echo "Directory not found before persisting!"
+            echo "----------------------------------------------------"           
             
  
 
@@ -387,11 +395,12 @@ jobs:
     docker:
       - image: cimg/base:stable
     steps:
+      - attach_workspace:
+          at: ~/project
       - checkout
       - install_awscli
       - install_nodejs
-      - attach_workspace:
-          at: ~/project
+     
       - run:
 
           name: Deploy backend # This step now includes dynamic inventory generation
