@@ -383,47 +383,81 @@ jobs:
             aws s3 cp dist s3://udapeople-${CIRCLE_WORKFLOW_ID:0:7} --recursive
 
   
-  deploy-backend:
-    docker:
-      - image: cimg/base:stable
-    steps:
-      - checkout
-      - install_awscli
-      - install_nodejs
-      - install_ansible
-      - add_ssh_keys:
-          fingerprints: ["SHA256:FJogcncZoAfN0hgvqhqDgAiiOafEii9G+HsAStU+Ok4"]
-      - attach_workspace:
-          at: ~/
       - run:
-          name: Install dependencies
+          name: Deploy backend # This step now includes dynamic inventory generation
           command: |
-            sudo apt -y install tar gzip curl
-      - run:
-          name: Deploy backend
-          command: |
+            # --- Navigate to backend, install deps, build (Keep these existing steps) ---
             cd backend
             npm install
             npm run build
-            
-            cd ..
-            tar -C backend -czvf artifact.tar.gz .
-            cp artifact.tar.gz .circleci/ansible/roles/deploy/files
-            
-            export TYPEORM_MIGRATIONS_DIR=./migrations
-            export TYPEORM_ENTITIES=./modules/domain/**/*.entity{.ts,.js}
-            export TYPEORM_MIGRATIONS=./migrations/*.ts
-            
-            cd .circleci/ansible
-            echo "Contents  of the inventory.txt file is -------"
-            cat inventory.txt
-            ansible-playbook -i inventory.txt deploy-backend.yml
-      - destroy-environment:
-          workflow_id: "${CIRCLE_WORKFLOW_ID:0:7}"
-      - revert-migrations:
-          workflow_id: "${CIRCLE_WORKFLOW_ID:0:7}"
 
-          
+            cd .. # Go back to the project root (where .circleci directory is)
+
+            # Package backend artifact
+            tar -C backend -czvf artifact.tar.gz .
+            # Ensure the target directory exists before copying
+            mkdir -p .circleci/ansible/roles/deploy/files
+            cp artifact.tar.gz .circleci/ansible/roles/deploy/files
+            # --- End of existing steps ---
+
+            # --- START: DYNAMIC INVENTORY GENERATION ---
+            echo "--- Starting dynamic inventory generation ---"
+            # !!! IMPORTANT !!!
+            # Configure your AWS Region if not already set as an environment variable in CircleCI
+            # export AWS_DEFAULT_REGION="your-aws-region" # Example: us-east-1
+            export AWS_REGION=eu-north-1 # Use default if set, otherwise set manually here or as CircleCI env var
+
+            # 1. Find the EC2 Instance
+            # !!! ADJUST THIS COMMAND TO FIND YOUR SPECIFIC INSTANCE !!!
+            # Example: Find instance by tag 'Name'
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --filters "Name=tag:Name,Values=your-backend-instance-name-tag" "Name=instance-state-name,Values=running" \
+              --query "Reservations[*].Instances[*].InstanceId" --output text --region ${AWS_REGION})
+
+            # Handle case where instance is not found
+            if [ -z "$INSTANCE_ID" ]; then
+              echo "Error: Could not find a running EC2 instance with the specified tag."
+              exit 1 # Fail the job if no target instance is found
+            fi
+
+            # 2. Get the Public IP Address
+            INSTANCE_IP=$(aws ec2 describe-instances \
+              --instance-ids $INSTANCE_ID \
+              --query "Reservations[*].Instances[*].PublicIpAddress" --output text --region ${AWS_REGION})
+
+            # Handle case where instance is found but has no public IP
+            if [ -z "$INSTANCE_IP" ]; then
+              echo "Error: Found instance $INSTANCE_ID but could not get its Public IP."
+              echo "Is it in a public subnet with auto-assign public IP enabled, or associated with an Elastic IP?"
+              exit 1 # Fail the job
+            fi
+
+            echo "Found Target EC2 Instance IP: $INSTANCE_IP"
+
+            # 3. Write to inventory.txt file
+            # The inventory file is needed in the .circleci/ansible directory for Ansible to find it
+            INVENTORY_FILE_PATH=".circleci/ansible/inventory.txt"
+
+            echo "[webserver]" > ${INVENTORY_FILE_PATH} # Create/overwrite the file with a group header
+            echo "$INSTANCE_IP" >> ${INVENTORY_FILE_PATH} # Add the IP address
+            echo "[all:children]" >> ${INVENTORY_FILE_PATH} # Add the children definition
+            echo "webserver" >> ${INVENTORY_FILE_PATH} # Include the group in 'all'
+
+            echo "--- Generated Dynamic Inventory file contents: ---"
+            cat ${INVENTORY_FILE_PATH} # Print the file contents for verification in the logs
+            echo "--- End of Generated Inventory ---"
+            # --- END: DYNAMIC INVENTORY GENERATION ---
+
+
+            # --- START: Run Ansible Playbook ---
+            # Now, change directory to where the playbook and the generated inventory are
+            cd .circleci/ansible
+
+            # Run Ansible playbook using the dynamically created inventory.txt
+            ansible-playbook -i inventory.txt deploy-backend.yml
+            # --- END: Run Ansible Playbook ---
+
+
   smoke-test:
     docker:
       - image: cimg/base:stable
