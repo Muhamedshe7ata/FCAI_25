@@ -257,15 +257,11 @@ jobs:
             echo "--- Files in .circleci/ansible before persisting ---"
             ls -la ~/project/.circleci/ansible/ || echo "Directory not found before persisting!"
             echo "----------------------------------------------------"           
-            
- 
-
       - persist_to_workspace:
           root: ~/project
           paths:
             - .circleci/ansible/inventory.txt # This path seems correct assuming your working_directory is ~/project
-      
-###################
+      ###################
   # configure-infrastructure:
   #   docker:
   #     - image: cimg/base:stable # Or similar base image
@@ -282,7 +278,7 @@ jobs:
   #           cd .circleci/ansible
   #           cat inventory.txt # This line was added to show the inventory content
   #           ansible-playbook -i inventory.txt configure-server.yml
-   configure-infrastructure:
+  configure-infrastructure:
     docker:
       - image: cimg/base:stable # Or similar base image
     steps:
