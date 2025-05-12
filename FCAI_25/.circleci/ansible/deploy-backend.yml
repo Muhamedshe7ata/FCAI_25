@@ -34,8 +34,6 @@
       raw: test -e /usr/bin/python3 || (apt -y update && apt install -y python3)
       changed_when: false
 
-  # Note: The 'setup:' line in the image seems incomplete or misplaced.
-  # It's typically a module used within tasks, not a top-level section like pre_tasks or roles.
     - setup:
 
   roles:
