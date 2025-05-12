@@ -595,7 +595,5 @@ workflows:
       - smoke-test:
           requires: [deploy-backend, deploy-frontend]
    #######   # - cloudfront-update:###################
-      #     requires: [smoke-test]
-      # - cleanup:
-      #     requires: [cloudfront-update]
-
+  
+############################################################
