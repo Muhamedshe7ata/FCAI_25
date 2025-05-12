@@ -253,7 +253,7 @@ jobs:
  
 
       - persist_to_workspace:
-          root: . # This root is fine
+          root: ~/project
           paths:
             - .circleci/ansible/inventory.txt # This path seems correct assuming your working_directory is ~/project
       
@@ -382,8 +382,18 @@ jobs:
             npm run build
             aws s3 cp dist s3://udapeople-${CIRCLE_WORKFLOW_ID:0:7} --recursive
 
+  deploy-backend: 
   
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - install_awscli
+      - install_nodejs
+      - attach_workspace:
+          at: ~/project
       - run:
+
           name: Deploy backend # This step now includes dynamic inventory generation
           command: |
             # --- Navigate to backend, install deps, build (Keep these existing steps) ---
@@ -549,7 +559,7 @@ workflows:
       - deploy-frontend:
           requires: [run-migrations]
       - deploy-backend:
-          requires: [run-migrations]
+          requires: [deploy-infrastructure]
       - smoke-test:
           requires: [deploy-backend, deploy-frontend]
  
