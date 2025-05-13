@@ -280,95 +280,93 @@ jobs:
   #           ansible-playbook -i inventory.txt configure-server.yml
   configure-infrastructure:
     docker:
-      - image: cimg/base:stable # Or similar base image
-    # ... docker and other initial steps like checkout, install_awscli, install_ansible ...
+      - image: cimg/base:stable # Use a suitable base image with basic tools
     steps:
-      - checkout
-      - install_awscli # NEED THIS HERE TO FETCH IP
+      - checkout # Checkout your code repository, including .circleci/ansible
+      - install_awscli # You need AWS CLI to fetch the dynamic IP
+      # Assume install_ansible and add_ssh_keys are custom/orb steps that work
       - install_ansible
       - add_ssh_keys:
-          fingerprints: ["SHA256:FJogcncZoAfN0hgvqhqDgAiiOafEii9G+HsAStU+Ok4"]
+          fingerprints: ["SHA256:FJogcncZoAfN0hgvqhqDgAiiOafEii9G+HsAStU+Ok4"] # Use your actual fingerprint
 
-      # --- NEW DEBUG/DYNAMIC INVENTORY RUN STEP ---
+      # --- STEP 1: GENERATE DYNAMIC INVENTORY ---
       - run:
-          name: Debug Generate and Verify Inventory
+          name: Generate Dynamic Ansible Inventory
           command: |
-            echo "--- Starting Debug Generate Inventory Step ---"
-            pwd # Show current directory (should be ~/project)
+            echo "--- Starting Dynamic Inventory Generation Step ---"
+            pwd # Print current directory (should be ~/project if working_directory is not set)
 
-            # --- 1. Fetch Dynamic IP ---
-            echo "--- Fetching EC2 Instance IP ---"
-            # Make sure your AWS Region is set! (Replace 'eu-north-1' or set AWS_DEFAULT_REGION env var)
-            export AWS_REGION="eu-north-1" # <<< Adjust region or remove if set as env var
+            # Make sure your AWS Region is configured! Either via CircleCI env var AWS_DEFAULT_REGION
+            # or explicitly set it here if it's consistent
+            export AWS_REGION=${AWS_DEFAULT_REGION:-eu-north-1} # Example, change region if needed
 
-            # !!! ADJUST FILTER to find YOUR specific backend EC2 instance !!!
-            # Example: using a tag called 'InstanceRole' with value 'backend'
-            # Replace with your actual method of finding the right instance
+            echo "--- Fetching EC2 Instance IP based on tag 'Name=backend-b4ed3be' (as seen in screenshot logs) ---"
+            # !!! ADJUST THIS aws command to find YOUR specific backend EC2 instance reliably !!!
+            # This filter example is taken from your log output (Name=backend-b4ed3be). Update if needed.
+            # Add additional filters like instance-state-name=running if necessary.
             BACKEND_PUBLIC_IP=$(aws ec2 describe-instances \
-              --filters "Name=instance-state-name,Values=running" "Name=tag:InstanceRole,Values=backend" \
+              --filters "Name=instance-state-name,Values=running" "Name=tag:Name,Values=backend-b4ed3be" \
               --query "Reservations[*].Instances[*].PublicIpAddress" --output text --region ${AWS_REGION})
 
-            echo "Fetched IP: ${BACKEND_PUBLIC_IP}"
-            
+            echo "AWS CLI Command Output for IP: '${BACKEND_PUBLIC_IP}'"
+
+            # Handle case where IP is not found (very important!)
             if [ -z "$BACKEND_PUBLIC_IP" ]; then
-              echo "Error: AWS CLI failed to fetch the backend public IP."
-              exit 1 # Fail job early if IP not found
+              echo "ERROR: Could NOT fetch backend public IP via AWS CLI. Check filters, region, and instance state."
+              exit 1 # Fail the job as we can't proceed without the IP
             fi
-            echo "Backend IP found: ${BACKEND_PUBLIC_IP}" # Confirm variable is populated
 
+            echo "Successfully Fetched IP: ${BACKEND_PUBLIC_IP}" # Confirm IP is in variable
 
-            # --- 2. Write to Inventory File ---
-            # Make sure the directory exists where the inventory file should be
-            mkdir -p .circleci/ansible
-            INVENTORY_FILE_PATH=".circleci/ansible/inventory.txt" # Path relative to pwd (which is ~/project)
+            # Define the path to your inventory file relative to the project root
+            INVENTORY_DIR=".circleci/ansible"
+            INVENTORY_FILE="${INVENTORY_DIR}/inventory.txt"
 
-            echo "--- Writing to Inventory File: ${INVENTORY_FILE_PATH} ---"
-            
-            # Use single > to overwrite/create, double >> to append
-            echo "[webserver]" > ${INVENTORY_FILE_PATH}
-            echo "${BACKEND_PUBLIC_IP}" >> ${INVENTORY_FILE_PATH} # Write the IP here
-            echo "[all:children]" >> ${INVENTORY_FILE_PATH}
-            echo "webserver" >> ${INVENTORY_FILE_PATH}
+            # Ensure the ansible directory exists before writing
+            mkdir -p ${INVENTORY_DIR}
 
-            echo "--- Done writing to inventory file ---"
+            echo "--- Writing dynamic inventory file to ${INVENTORY_FILE} ---"
+            # Overwrite the file with the correct format
+            echo "[webserver]" > ${INVENTORY_FILE}
+            echo "${BACKEND_PUBLIC_IP}" >> ${INVENTORY_FILE} # Write the actual fetched IP
+            echo "[all:children]" >> ${INVENTORY_FILE}
+            echo "webserver" >> ${INVENTORY_FILE} # Make 'webserver' part of the 'all' group
 
+            echo "--- Final content of dynamically generated inventory file: ---"
+            cat ${INVENTORY_FILE} || echo "ERROR: Could NOT read inventory file after writing!" # Verify content
+            echo "-------------------------------------------------------------"
+            echo "--- Files in .circleci/ansible directory after generation ---"
+            ls -la ${INVENTORY_DIR} || echo "Directory not found or empty!" # Verify file is there
+            echo "-------------------------------------------------------------"
 
-            # --- 3. Verify Written File Content BEFORE Ansible Run ---
-            echo "--- Final Content of Generated Inventory File in configure-infrastructure (BEFORE running Ansible) ---"
-            # Use 'cat' to display the file content we just wrote
-            cat ${INVENTORY_FILE_PATH} || echo "ERROR: Could NOT read the inventory file just created!"
-            echo "--------------------------------------------------------------------------------------------------"
-            echo "--- Listing files in .circleci/ansible directory ---"
-            ls -la .circleci/ansible/
-            echo "---------------------------------------------------"
-
-      # --- !!! Now, AFTER the above step, this 'Configure Server' step runs !!! ---
-      # This run step executes the original commands, but inventory.txt *should* now exist and be populated.
+      # --- STEP 2: RUN CONFIGURE-SERVER PLAYBOOK (NOW WITH POPULATED INVENTORY) ---
       - run:
-          name: Configure Server # Runs Ansible using the inventory created in the previous step
+          name: Run Configure Server Playbook
           command: |
-            echo "--- Entering Configure Server Step ---"
-            pwd # Should still be ~/project (or your working_directory)
+            echo "--- Entering Run Configure Server Playbook Step ---"
+            pwd # Show current directory (should be ~/project)
 
-            # Check inventory content AGAIN just to be super sure it's still there
-            echo "--- Final Check: Content of inventory.txt just before Ansible-playbook ---"
-            cat .circleci/ansible/inventory.txt || echo "ERROR: inventory.txt disappeared or is unreadable BEFORE PLAYBOOK!"
-            echo "-----------------------------------------------------------------------"
+            # Re-verify inventory content *just before* running playbook
+            echo "--- Content of inventory.txt just before running configure-server.yml ---"
+            cat .circleci/ansible/inventory.txt || echo "ERROR: inventory.txt is missing or unreadable just before playbook!"
+            echo "--------------------------------------------------------------------"
 
-            # Change directory to where playbook and inventory are
+            # Change directory to where playbook and the populated inventory are located
             cd .circleci/ansible
-            
-            # Run the playbook. It *should* find the populated inventory.txt now.
-            # Add --verbose or -vvv for more debug info from Ansible itself
-            ansible-playbook -i inventory.txt configure-server.yml --verbose
 
-            echo "--- Finished Configure Server Step ---"
+            # Run the playbook using the populated inventory file
+            # Added -v for slightly more verbose Ansible output to help debugging if it still skips
+            ansible-playbook -i inventory.txt configure-server.yml -v
 
-      # --- Crucially, persist the inventory file for the next job ---
+            echo "--- Finished Run Configure Server Playbook ---"
+
+      # --- STEP 3: PERSIST POPULATED INVENTORY AND ANSIBLE DIRECTORY ---
+      # Save the entire .circleci/ansible directory to the workspace, including the generated inventory.txt
+      # This makes it available for the deploy-backend job.
       - persist_to_workspace:
-          root: ~/project # Standard root
+          root: ~/project # Standard location after checkout
           paths:
-            - .circleci/ansible 
+            - .circleci/ansible # Save the entire directory containing playbook and populated inventory
             
   run-migrations:
     docker:
@@ -477,51 +475,90 @@ jobs:
             cd frontend
             npm run build
             aws s3 cp dist s3://udapeople-${CIRCLE_WORKFLOW_ID:0:7} --recursive
-deploy-backend:
-      docker:
-        - image: cimg/base:stable
-      steps:
-        # Attach workspace here at the beginning
-        - attach_workspace:
-            at: ~/project # Must match root in persist_to_workspace from configure-infrastructure
+  deploy-backend:
+    docker:
+      - image: cimg/base:stable # Use a suitable base image
+    steps:
+      # --- STEP 1: ATTACH WORKSPACE FROM configure-infrastructure JOB ---
+      - attach_workspace:
+          at: ~/project # This must exactly match the 'root' in persist_to_workspace above
+      # You might need checkout here if your source code (backend, ansible playbook files, etc.)
+      # is NOT included in the workspace persistence from the previous job.
+      - checkout # Checkout source code (important if not fully in workspace)
 
-        # Add checkout here if your code repo is NOT fully covered by the workspace
-        - checkout 
-        # Ensure dependencies like install_awscli, install_nodejs, install_ansible are
-        # met in this job if needed for the deploy-backend steps
-        
-        # --- IMPORTANT ---
-        # Remove the dynamic IP fetching and inventory generation logic
-        # from the run: Deploy backend command in THIS job.
-        # That should only happen once in configure-infrastructure.
-        # THIS job receives the INVENTORY file via the workspace.
-        # --- --- ---
+      # Install dependencies needed for THIS job (node, npm, etc.)
+      # Only install if not covered by the attached workspace or base image
+      - install_nodejs # Example, ensure you have necessary steps to run npm commands
+      # install_ansible should already be present if attached or if it's in the image
 
-        - run:
-            name: Deploy backend # Now uses the attached inventory
-            command: |
-              # Debugging: Confirm the attached inventory file exists and has content in this job
-              echo "--- Checking Inventory After Workspace Attachment in deploy-backend ---"
-              cat ~/project/.circleci/ansible/inventory.txt || echo "ERROR: Inventory not found or empty AFTER ATTACHING WORKSPACE!"
-              echo "------------------------------------------------------------------------"
-              
-              # ... (Keep the steps for building/packaging the backend here) ...
-              cd ~/project/backend # Adjust path based on checkout/attachment
-              npm install
-              npm run build
-              
-              cd ~/project # Adjust path
-              tar -C backend -czvf artifact.tar.gz .
-              mkdir -p .circleci/ansible/roles/deploy/files
-              cp artifact.tar.gz .circleci/ansible/roles/deploy/files
-              # ... (End build/package) ...
+      # --- STEP 2: VERIFY ATTACHED INVENTORY (DEBUG) ---
+      - run:
+          name: Verify Attached Inventory in Deploy Job
+          command: |
+            echo "--- Verifying Inventory After Workspace Attachment in deploy-backend Job ---"
+            pwd # Show current directory (should be ~/project)
+            
+            # Check for the expected directory structure and file
+            echo "--- Files in expected ansible directory after attachment ---"
+            ls -la ~/project/.circleci/ansible/ || echo "ERROR: Directory .circleci/ansible not found after attachment!"
+            echo "----------------------------------------------------------"
+            
+            # Check the content of the attached inventory file
+            echo "--- Content of inventory.txt after workspace attachment ---"
+            cat ~/project/.circleci/ansible/inventory.txt || echo "ERROR: inventory.txt NOT FOUND or EMPTY AFTER ATTACHING WORKSPACE!"
+            echo "--------------------------------------------------------"
+            echo "--- End of Verification ---"
 
-              # Now navigate to where the PLAYBOOK AND the attached inventory are located
-              cd ~/project/.circleci/ansible # This should now have the file attached from workspace
+      # --- STEP 3: BUILD AND PACKAGE BACKEND (Keep your existing logic) ---
+      - run:
+          name: Build and Package Backend
+          command: |
+            # Navigate to backend code (path relative to where code was checked out/attached)
+            cd ~/project/backend # ADJUST THIS PATH if backend code isn't here
 
-              # Run Ansible using the attached inventory file
-              ansible-playbook -i inventory.txt deploy-backend.yml
-              # ... rest of your deploy backend logic .
+            # Ensure node_modules are installed if needed for build/package
+            # (These might need to be installed HERE if they aren't persisted or built previously)
+            npm install 
+            npm run build # Run your backend build command (should produce JS files, etc.)
+
+            cd ~/project # Go back to the root
+
+            # Package backend artifact (ensure 'backend' dir exists and is in the right place)
+            tar -C backend -czvf artifact.tar.gz .
+            
+            # Copy artifact to the deploy role files directory within the ansible directory
+            # This ansible directory was ATTACHED from the workspace
+            mkdir -p .circleci/ansible/roles/deploy/files # Ensure target directory exists
+            cp artifact.tar.gz .circleci/ansible/roles/deploy/files # Copy artifact here
+
+      # --- STEP 4: RUN DEPLOY-BACKEND PLAYBOOK (Using the Attached Inventory) ---
+      - run:
+          name: Run Deploy Backend Playbook
+          command: |
+            echo "--- Entering Run Deploy Backend Playbook Step ---"
+            pwd # Show current directory (should be ~/project)
+            
+            # Re-verify inventory content AGAIN just before running playbook
+            echo "--- Content of inventory.txt just before running deploy-backend.yml ---"
+            cat ~/project/.circleci/ansible/inventory.txt || echo "ERROR: inventory.txt is missing or unreadable just before playbook!"
+            echo "--------------------------------------------------------------------"
+
+            # Change directory to where playbook and attached inventory are located
+            cd ~/project/.circleci/ansible
+
+            # Run the playbook using the attached inventory file
+            # Add -v for slightly more verbose output
+            ansible-playbook -i inventory.txt deploy-backend.yml -v
+
+            echo "--- Finished Run Deploy Backend Playbook ---"
+
+      # Note: destroy-environment and revert-migrations steps were logically problematic after a successful deploy.
+      # You might want to remove them unless they are intended for cleanup *after* the entire workflow finishes,
+      # and are configured conditionally on workflow success/failure.
+      # - destroy-environment:
+      #     workflow_id: "${CIRCLE_WORKFLOW_ID:0:7}"
+      # - revert-migrations:
+      #     workflow_id: "${CIRCLE_WORKFLOW_ID:0:7}"
 smoke-test:
     docker:
       - image: cimg/base:stable
@@ -613,7 +650,7 @@ workflows:
       - deploy-frontend:
           requires: [run-migrations]
       - deploy-backend:
-          requires: [deploy-infrastructure]
+          requires: [configure-infrastructure]
       - smoke-test:
           requires: [deploy-backend, deploy-frontend]
  
